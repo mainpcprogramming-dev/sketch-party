@@ -9,7 +9,6 @@ const io = new Server(server);
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// 難易度別のお題リスト（複数表記でひらがな・カタカナ・漢字に対応）
 // 難易度別のお題リスト（各50個：ひらがな・カタカナ・漢字・別称に対応）
 const WORDS = {
   easy: [
@@ -176,6 +175,8 @@ function normalizeText(str) {
 }
 
 const rooms = {};
+// タイマーオブジェクトはSocket.IOで送信されるroomsオブジェクトの外で管理（循環参照フリーズ防止）
+const roomTimers = {};
 
 function generateRoomId() {
   return Math.floor(1000 + Math.random() * 9000).toString();
@@ -188,6 +189,14 @@ function getRandomWord(difficulty, usedWords) {
   const selected = pool[Math.floor(Math.random() * pool.length)];
   usedWords.push(selected[0]);
   return selected;
+}
+
+function clearRoomTimers(roomId) {
+  if (roomTimers[roomId]) {
+    if (roomTimers[roomId].timer) clearInterval(roomTimers[roomId].timer);
+    if (roomTimers[roomId].cdInterval) clearInterval(roomTimers[roomId].cdInterval);
+    delete roomTimers[roomId];
+  }
 }
 
 io.on('connection', (socket) => {
@@ -212,7 +221,6 @@ io.on('connection', (socket) => {
       currentWord: null,
       usedWords: [],
       passesLeft: 0,
-      timer: null,
       timeLeft: 0
     };
 
@@ -255,6 +263,9 @@ io.on('connection', (socket) => {
     const room = rooms[socket.roomId];
     if (!room) return;
 
+    // カウントダウン中やプレイ中の重複クリックを無視
+    if (room.state === 'countdown' || room.state === 'playing') return;
+
     if (room.state === 'lobby') {
       if (room.players.length < 2) return socket.emit('errorMsg', '2人以上必要です。');
       if (!room.players.every(p => p.ready)) return socket.emit('errorMsg', '全員が準備OKになる必要があります。');
@@ -276,6 +287,9 @@ io.on('connection', (socket) => {
   });
 
   function startTurnCountdown(room) {
+    clearRoomTimers(room.id);
+    roomTimers[room.id] = {};
+
     room.state = 'countdown';
     room.passesLeft = room.settings.maxPasses;
     room.currentWord = getRandomWord(room.settings.difficulty, room.usedWords);
@@ -289,12 +303,15 @@ io.on('connection', (socket) => {
 
     let count = 3;
     io.to(room.id).emit('countdown', count);
-    const cdInterval = setInterval(() => {
+    roomTimers[room.id].cdInterval = setInterval(() => {
       count--;
       if (count > 0) {
         io.to(room.id).emit('countdown', count);
       } else {
-        clearInterval(cdInterval);
+        if (roomTimers[room.id] && roomTimers[room.id].cdInterval) {
+          clearInterval(roomTimers[room.id].cdInterval);
+          roomTimers[room.id].cdInterval = null;
+        }
         beginDrawingTurn(room);
       }
     }, 1000);
@@ -304,15 +321,17 @@ io.on('connection', (socket) => {
     room.state = 'playing';
     room.timeLeft = room.settings.timeLimit;
     const drawer = room.players[room.drawerIndex];
+    if (!drawer) return;
 
-    io.to(room.id).emit('turnStarted', {
-      room,
-      word: null
-    });
-    // 描き手にだけお題を送信
+    io.to(room.id).emit('turnStarted', { room });
     io.to(drawer.id).emit('secretWord', room.currentWord[0]);
 
-    room.timer = setInterval(() => {
+    if (!roomTimers[room.id]) roomTimers[room.id] = {};
+    roomTimers[room.id].timer = setInterval(() => {
+      if (room.state !== 'playing') {
+        clearRoomTimers(room.id);
+        return;
+      }
       room.timeLeft--;
       io.to(room.id).emit('timerTick', room.timeLeft);
       if (room.timeLeft <= 0) {
@@ -322,11 +341,14 @@ io.on('connection', (socket) => {
   }
 
   function endTurn(room, reason) {
-    clearInterval(room.timer);
+    if (room.state !== 'playing') return;
     room.state = 'turnEnd';
+    clearRoomTimers(room.id);
+
+    const answerText = Array.isArray(room.currentWord) ? room.currentWord[0] : String(room.currentWord || '');
     io.to(room.id).emit('turnEnded', {
       reason,
-      answer: room.currentWord[0],
+      answer: answerText,
       room
     });
   }
@@ -336,7 +358,7 @@ io.on('connection', (socket) => {
     const room = rooms[socket.roomId];
     if (!room || room.state !== 'playing') return;
     const drawer = room.players[room.drawerIndex];
-    if (drawer.id !== socket.id || room.passesLeft <= 0) return;
+    if (!drawer || drawer.id !== socket.id || room.passesLeft <= 0) return;
 
     room.passesLeft--;
     room.currentWord = getRandomWord(room.settings.difficulty, room.usedWords);
@@ -358,64 +380,72 @@ io.on('connection', (socket) => {
     socket.to(socket.roomId).emit('clearCanvas');
   });
 
-  // ← 追加：1つ戻る（Undo）の同期
   socket.on('undo', () => {
     socket.to(socket.roomId).emit('undo');
   });
 
   // チャット・回答判定
   socket.on('chatMessage', (msg) => {
-    const room = rooms[socket.roomId];
-    if (!room) return;
-    const player = room.players.find(p => p.id === socket.id);
-    if (!player) return;
+    try {
+      const room = rooms[socket.roomId];
+      if (!room || typeof msg !== 'string') return;
+      const player = room.players.find(p => p.id === socket.id);
+      if (!player) return;
 
-    // ゲーム中かつ回答者の場合
-    if (room.state === 'playing' && room.players[room.drawerIndex].id !== socket.id) {
-      if (player.answered || player.guessesLeft <= 0) return;
+      const drawer = room.players[room.drawerIndex];
 
-      player.guessesLeft--;
-      const normalizedInput = normalizeText(msg);
-      const isCorrect = room.currentWord.some(ans => normalizeText(ans) === normalizedInput);
+      // ゲーム中かつ回答者の場合
+      if (room.state === 'playing' && drawer && drawer.id !== socket.id) {
+        if (player.answered || player.guessesLeft <= 0) return;
 
-      if (isCorrect) {
-        player.answered = true;
-        player.score += 1;
-        room.players[room.drawerIndex].score += 1;
-        io.to(room.id).emit('chatBroadcast', {
-          name: 'システム',
-          text: `🎉 ${player.name} さんが正解しました！（+1pt）`,
-          isSystem: true
-        });
-        io.to(room.id).emit('roomUpdated', room);
+        player.guessesLeft--;
+        const normalizedInput = normalizeText(msg);
+        const wordCandidates = Array.isArray(room.currentWord) ? room.currentWord : [room.currentWord];
+        const isCorrect = wordCandidates.some(ans => normalizeText(String(ans)) === normalizedInput);
 
-        // 誰か1人でも正解したらターン終了にする場合（全員正解待ちにしたい場合はここを調整）
-        endTurn(room, `${player.name} さんが正解！`);
-        return;
-      } else {
-        io.to(room.id).emit('chatBroadcast', {
-          name: player.name,
-          text: `${msg} (残り回答権: ${player.guessesLeft}回)`
-        });
-        io.to(room.id).emit('roomUpdated', room);
+        if (isCorrect) {
+          player.answered = true;
+          player.score += 1;
+          drawer.score += 1;
 
-        // 全回答者の回答制限が0になったら強制終了
-        const guessers = room.players.filter((_, idx) => idx !== room.drawerIndex);
-        if (guessers.every(g => g.guessesLeft <= 0 || g.answered)) {
-          endTurn(room, '全員の回答回数が上限に達しました！');
+          io.to(room.id).emit('chatBroadcast', {
+            name: 'システム',
+            text: `🎉 ${player.name} さんが正解しました！（+1pt）`,
+            isSystem: true
+          });
+          io.to(room.id).emit('roomUpdated', room);
+
+          // 回答者が1人正解したら即座にそのターンを終了
+          endTurn(room, `${player.name} さんが正解！`);
+          return;
+        } else {
+          io.to(room.id).emit('chatBroadcast', {
+            name: player.name,
+            text: `${msg} (残り回答権: ${player.guessesLeft}回)`
+          });
+          io.to(room.id).emit('roomUpdated', room);
+
+          // 全回答者の回答制限が0になったら強制終了
+          const guessers = room.players.filter((_, idx) => idx !== room.drawerIndex);
+          if (guessers.length > 0 && guessers.every(g => g.guessesLeft <= 0 || g.answered)) {
+            endTurn(room, '全員の回答回数が上限に達しました！');
+          }
+          return;
         }
-        return;
       }
-    }
 
-    // ロビーやターン終了時の通常チャット
-    io.to(room.id).emit('chatBroadcast', { name: player.name, text: msg });
+      // ロビーやターン終了時の通常チャット
+      io.to(room.id).emit('chatBroadcast', { name: player.name, text: msg });
+    } catch (err) {
+      console.error('chatMessage error:', err);
+    }
   });
 
   // ロビーに戻る（ゲーム終了後）
   socket.on('backToLobby', () => {
     const room = rooms[socket.roomId];
     if (!room) return;
+    clearRoomTimers(room.id);
     room.state = 'lobby';
     room.players.forEach(p => { p.ready = false; p.score = 0; });
     io.to(room.id).emit('roomUpdated', room);
@@ -435,11 +465,14 @@ io.on('connection', (socket) => {
     socket.roomId = null;
 
     if (room.players.length === 0) {
-      clearInterval(room.timer);
+      clearRoomTimers(roomId);
       delete rooms[roomId];
     } else {
       if (room.hostId === socket.id) {
         room.hostId = room.players[0].id;
+      }
+      if (room.drawerIndex >= room.players.length) {
+        room.drawerIndex = 0;
       }
       io.to(roomId).emit('roomUpdated', room);
     }

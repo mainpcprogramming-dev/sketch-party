@@ -346,7 +346,7 @@ canvas {
   background: #fff;
   cursor: crosshair;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-  touch-action: none; /* ← 追加：スマホで描くときの画面スクロール防止 */
+  touch-action: none;
 }
 
 .tools {
