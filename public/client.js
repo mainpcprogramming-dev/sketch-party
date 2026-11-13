@@ -4,13 +4,18 @@ const homeScreen = document.getElementById('homeScreen');
 const lobbyScreen = document.getElementById('lobbyScreen');
 const gameScreen = document.getElementById('gameScreen');
 const overlay = document.getElementById('overlay');
-const nextTurnBtn = document.getElementById('nextTurnBtn');
+const turnEndReadyArea = document.getElementById('turnEndReadyArea');
+const turnEndReadyBtn = document.getElementById('turnEndReadyBtn');
+const turnEndReadyCount = document.getElementById('turnEndReadyCount');
 const backLobbyBtn = document.getElementById('backLobbyBtn');
+const readyBtn = document.getElementById('readyBtn');
+const passPopup = document.getElementById('passPopup');
 
 let myId = null;
 let currentRoom = null;
 let isDrawer = false;
 let toolMode = 'pen';
+let passPopupTimer = null;
 
 socket.on('connect', () => { myId = socket.id; });
 socket.on('errorMsg', (msg) => alert(msg));
@@ -55,20 +60,33 @@ function emitSettings() {
 });
 timeSlider.oninput = () => { document.getElementById('timeVal').textContent = timeSlider.value; };
 
-document.getElementById('readyBtn').onclick = () => socket.emit('toggleReady');
-document.getElementById('startGameBtn').onclick = () => socket.emit('startOrNextTurn');
+// 準備OKボタン（ロビー・ターン終了画面共通）
+readyBtn.onclick = () => socket.emit('toggleReady');
+turnEndReadyBtn.onclick = () => socket.emit('toggleReady');
 
-nextTurnBtn.onclick = () => {
-  nextTurnBtn.disabled = true;
-  socket.emit('startOrNextTurn');
-};
-
+document.getElementById('startGameBtn').onclick = () => socket.emit('startGame');
 backLobbyBtn.onclick = () => socket.emit('backToLobby');
+
+// 準備OKボタンの色（未準備=赤 danger / 準備完了=緑 success）を更新する共通関数
+function updateReadyButtonStyle(btnElement, isReady) {
+  if (isReady) {
+    btnElement.classList.remove('danger');
+    btnElement.classList.add('success');
+    btnElement.textContent = '✅ 準備OK（解除する）';
+  } else {
+    btnElement.classList.remove('success');
+    btnElement.classList.add('danger');
+    btnElement.textContent = '準備OK';
+  }
+}
 
 // --- ルーム状態更新 ---
 socket.on('roomUpdated', (room) => {
   currentRoom = room;
   const isHost = room.hostId === myId;
+  const me = room.players.find(p => p.id === myId);
+  const readyCount = room.players.filter(p => p.ready).length;
+  const totalCount = room.players.length;
 
   if (room.state === 'lobby') {
     homeScreen.classList.add('hidden');
@@ -86,24 +104,34 @@ socket.on('roomUpdated', (room) => {
 
     [timeSlider, diffSelect, guessLimitInput, winPointsInput, passLimitInput].forEach(el => el.disabled = !isHost);
 
+    // 準備OK人数の表示
+    document.getElementById('lobbyReadyCount').textContent = `準備OK: ${readyCount} / ${totalCount}人`;
+
+    // 自分の準備OKボタンの色を更新（未準備=赤、OK=緑）
+    if (me) updateReadyButtonStyle(readyBtn, me.ready);
+
     const list = document.getElementById('playerList');
     list.innerHTML = room.players.map(p => {
       const badge = p.ready
         ? '<span class="status-ready">✅ 準備OK</span>'
-        : '<span class="status-wait">待機中</span>';
+        : '<span class="status-wait">未準備</span>';
       return `<li><span>${p.name} ${p.id === room.hostId ? '👑' : ''}</span>${badge}</li>`;
     }).join('');
 
     const startBtn = document.getElementById('startGameBtn');
     if (isHost) {
       startBtn.classList.remove('hidden');
-      startBtn.disabled = !(room.players.length >= 2 && room.players.every(p => p.ready));
+      startBtn.disabled = !(totalCount >= 2 && readyCount === totalCount);
     } else {
       startBtn.classList.add('hidden');
     }
+  } else if (room.state === 'turnEnd') {
+    // ターン終了画面の準備OK人数＆ボタン色のリアルタイム更新
+    turnEndReadyCount.textContent = `準備OK: ${readyCount} / ${totalCount}人`;
+    if (me) updateReadyButtonStyle(turnEndReadyBtn, me.ready);
   } else if (room.state === 'gameEnd') {
     overlay.classList.remove('hidden');
-    nextTurnBtn.classList.add('hidden');
+    turnEndReadyArea.classList.add('hidden');
     backLobbyBtn.classList.remove('hidden');
     const ranking = [...room.players].sort((a, b) => b.score - a.score)
       .map((p, i) => `${i + 1}位: ${p.name} (${p.score}pt)`).join('<br>');
@@ -119,13 +147,24 @@ function updateScoreBoard(room) {
   sb.innerHTML = '<strong>スコア:</strong> ' + room.players.map(p => `${p.name} (<b>${p.score}pt</b>)`).join(' / ');
 }
 
+// --- パス時の1秒間ポップアップ表示 ---
+socket.on('wordPassedPopup', () => {
+  if (passPopupTimer) clearTimeout(passPopupTimer);
+  passPopup.classList.remove('hidden');
+  // アニメーションを再発火させるためのリフロー
+  void passPopup.offsetWidth;
+  passPopupTimer = setTimeout(() => {
+    passPopup.classList.add('hidden');
+    passPopupTimer = null;
+  }, 1000);
+});
+
 // --- カウントダウン・ターン進行 ---
 socket.on('countdown', (num) => {
   lobbyScreen.classList.add('hidden');
   gameScreen.classList.remove('hidden');
   overlay.classList.remove('hidden');
-  nextTurnBtn.classList.add('hidden');
-  nextTurnBtn.disabled = false;
+  turnEndReadyArea.classList.add('hidden');
   backLobbyBtn.classList.add('hidden');
   document.getElementById('overlayText').textContent = `次のターン開始まで... ${num}`;
 });
@@ -140,8 +179,10 @@ socket.on('turnStarted', ({ room }) => {
   document.getElementById('wordDisplay').textContent = isDrawer ? 'お題取得中...' : 'お題: ？？？';
 
   document.getElementById('drawTools').classList.toggle('hidden', !isDrawer);
-  document.getElementById('chatInput').disabled = isDrawer;
-  document.getElementById('chatInput').placeholder = isDrawer ? '描き手は入力できません' : '答えを入力...';
+  const chatInput = document.getElementById('chatInput');
+  chatInput.value = '';
+  chatInput.disabled = isDrawer;
+  chatInput.placeholder = isDrawer ? '描き手は入力できません' : '答えを入力...';
 });
 
 socket.on('secretWord', (word) => {
@@ -156,9 +197,17 @@ socket.on('turnEnded', ({ reason, answer, room }) => {
   drawing = false;
   overlay.classList.remove('hidden');
   document.getElementById('overlayText').innerHTML = `${reason}<br>正解は「<span style="color:#fbbf24;">${answer}</span>」でした！`;
-  nextTurnBtn.classList.remove('hidden');
-  nextTurnBtn.disabled = false;
+
+  turnEndReadyArea.classList.remove('hidden');
   backLobbyBtn.classList.add('hidden');
+
+  const readyCount = room.players.filter(p => p.ready).length;
+  const totalCount = room.players.length;
+  turnEndReadyCount.textContent = `準備OK: ${readyCount} / ${totalCount}人`;
+
+  const me = room.players.find(p => p.id === myId);
+  if (me) updateReadyButtonStyle(turnEndReadyBtn, me.ready);
+
   updateScoreBoard(room);
 });
 
@@ -375,11 +424,21 @@ document.getElementById('chatForm').onsubmit = (e) => {
   input.value = '';
 };
 
-socket.on('chatBroadcast', ({ name, text, isSystem }) => {
+socket.on('chatBroadcast', ({ name, text, msgType }) => {
   const log = document.getElementById('chatLog');
   const div = document.createElement('div');
-  div.className = isSystem ? 'chat-msg system' : 'chat-msg';
-  div.innerHTML = isSystem ? text : `<b>${name}:</b> ${text}`;
+
+  if (msgType === 'correct') {
+    div.className = 'chat-msg correct';
+    div.textContent = text;
+  } else if (msgType === 'pass') {
+    div.className = 'chat-msg pass';
+    div.textContent = text;
+  } else {
+    div.className = 'chat-msg';
+    div.innerHTML = `<b>${name}:</b> ${text}`;
+  }
+
   log.appendChild(div);
   log.scrollTop = log.scrollHeight;
 });

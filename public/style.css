@@ -228,6 +228,30 @@ select:disabled {
   border: 1px solid var(--border);
 }
 
+.players-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 2px solid var(--border);
+  padding-bottom: 6px;
+  margin-bottom: 12px;
+}
+
+.players-header h3 {
+  border-bottom: none;
+  padding-bottom: 0;
+  margin-bottom: 0;
+}
+
+.ready-counter {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--primary);
+  background: #eef2ff;
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+
 .setting-item {
   margin-bottom: 14px;
   font-size: 14px;
@@ -271,16 +295,16 @@ input[type="range"] {
 }
 
 .status-ready {
-  color: var(--success);
-  background: #ecfdf5;
+  color: #fff;
+  background: var(--success);
   padding: 3px 10px;
   border-radius: 999px;
   font-size: 12px;
 }
 
 .status-wait {
-  color: var(--text-muted);
-  background: #f1f5f9;
+  color: #fff;
+  background: var(--danger);
   padding: 3px 10px;
   border-radius: 999px;
   font-size: 12px;
@@ -422,11 +446,20 @@ input[type="color"] {
   word-break: break-word;
 }
 
-.chat-msg.system {
+/* 正解通知（緑色） */
+.chat-msg.correct {
   background: #ecfdf5;
-  border-color: #a7f3d0;
+  border-color: #6ee7b7;
   color: #065f46;
-  font-weight: 700;
+  font-weight: 800;
+}
+
+/* パス通知（緑と被らないオレンジ色） */
+.chat-msg.pass {
+  background: #fff7ed;
+  border-color: #fdba74;
+  color: #c2410c;
+  font-weight: 800;
 }
 
 #chatForm {
@@ -439,11 +472,36 @@ input[type="color"] {
   flex: 1;
 }
 
-/* オーバーレイ（カウントダウン・結果） */
+/* パス時の1秒間ポップアップ */
+.pass-popup {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(234, 88, 12, 0.95);
+  color: #fff;
+  font-size: 42px;
+  font-weight: 800;
+  padding: 20px 48px;
+  border-radius: 20px;
+  box-shadow: 0 12px 32px rgba(234, 88, 12, 0.45);
+  z-index: 200;
+  pointer-events: none;
+  animation: popFade 1s ease forwards;
+}
+
+@keyframes popFade {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.7); }
+  15% { opacity: 1; transform: translate(-50%, -50%) scale(1.05); }
+  80% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(0.95); }
+}
+
+/* オーバーレイ（カウントダウン・ターン終了・結果） */
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.82);
+  background: rgba(15, 23, 42, 0.85);
   backdrop-filter: blur(4px);
   color: #fff;
   display: flex;
@@ -461,7 +519,30 @@ input[type="color"] {
   line-height: 1.6;
 }
 
-.overlay button {
+.turn-ready-area {
+  margin-top: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 20px 36px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.turn-ready-count {
+  font-size: 20px;
+  font-weight: 800;
+  color: #fde047;
+}
+
+.turn-ready-area button {
+  font-size: 18px;
+  padding: 14px 36px;
+}
+
+#backLobbyBtn {
   margin-top: 24px;
   font-size: 18px;
   padding: 14px 32px;

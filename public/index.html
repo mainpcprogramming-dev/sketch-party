@@ -14,12 +14,12 @@
       <div class="home-card">
         <div class="input-group">
           <label for="usernameInput">ユーザー名</label>
-          <input type="text" id="usernameInput" placeholder="あなたの名前を入力" maxlength="12">
+          <input type="text" id="usernameInput" placeholder="あなたの名前を入力" maxlength="12" autocomplete="off">
         </div>
         <div class="home-actions">
           <button id="createRoomBtn" style="width:100%; font-size:16px; padding:12px;">新しく部屋を作成する</button>
           <div class="join-row">
-            <input type="text" id="roomIdInput" placeholder="4桁の部屋番号" maxlength="4">
+            <input type="text" id="roomIdInput" placeholder="4桁の部屋番号" maxlength="4" autocomplete="off">
             <button id="joinRoomBtn" class="success">部屋に参加</button>
           </div>
         </div>
@@ -51,24 +51,27 @@
           </div>
           <div class="setting-item-row">
             <label for="guessLimitInput">回答制限回数</label>
-            <div><input type="number" id="guessLimitInput" min="1" max="20" value="3" style="width:70px;"> 回</div>
+            <div><input type="number" id="guessLimitInput" min="1" max="20" value="3" style="width:70px;" autocomplete="off"> 回</div>
           </div>
           <div class="setting-item-row">
             <label for="winPointsInput">勝利ポイント</label>
-            <div><input type="number" id="winPointsInput" min="1" max="30" value="5" style="width:70px;"> pt</div>
+            <div><input type="number" id="winPointsInput" min="1" max="30" value="5" style="width:70px;" autocomplete="off"> pt</div>
           </div>
           <div class="setting-item-row">
             <label for="passLimitInput">パス可能回数</label>
-            <div><input type="number" id="passLimitInput" min="0" max="10" value="2" style="width:70px;"> 回</div>
+            <div><input type="number" id="passLimitInput" min="0" max="10" value="2" style="width:70px;" autocomplete="off"> 回</div>
           </div>
         </div>
 
         <!-- プレイヤー一覧 -->
         <div class="players-panel">
-          <h3>参加者一覧</h3>
+          <div class="players-header">
+            <h3>参加者一覧</h3>
+            <span id="lobbyReadyCount" class="ready-counter">準備OK: 0 / 0人</span>
+          </div>
           <ul id="playerList"></ul>
           <div class="lobby-buttons">
-            <button id="readyBtn" class="success">準備OK</button>
+            <button id="readyBtn" class="danger">準備OK</button>
             <button id="startGameBtn" class="hidden">ゲームスタート</button>
           </div>
         </div>
@@ -105,18 +108,24 @@
         <div class="chat-box">
           <div id="scoreBoard"></div>
           <div id="chatLog"></div>
-          <form id="chatForm">
-            <input type="text" id="chatInput" placeholder="答えを入力...">
+          <form id="chatForm" autocomplete="off">
+            <input type="text" id="chatInput" name="quiz_answer_field" placeholder="答えを入力..." autocomplete="off">
             <button type="submit">送信</button>
           </form>
         </div>
       </div>
     </div>
 
+    <!-- パス時の1秒間ポップアップ -->
+    <div id="passPopup" class="pass-popup hidden">⏭️ パス！</div>
+
     <!-- カウントダウン・ターン終了・最終結果オーバーレイ -->
     <div id="overlay" class="overlay hidden">
       <div id="overlayText"></div>
-      <button id="nextTurnBtn" class="success hidden">次のゲームへ</button>
+      <div id="turnEndReadyArea" class="turn-ready-area hidden">
+        <div id="turnEndReadyCount" class="turn-ready-count">準備OK: 0 / 0人</div>
+        <button id="turnEndReadyBtn" class="danger">準備OK</button>
+      </div>
       <button id="backLobbyBtn" class="hidden">ロビーに戻る</button>
     </div>
   </div>
