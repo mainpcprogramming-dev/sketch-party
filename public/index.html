@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>お絵描きなにかいてるかな？</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <!-- ホーム画面 -->
+    <div id="homeScreen">
+      <h1>🎨 お絵描きなにかいてるかな？</h1>
+      <div class="home-card">
+        <div class="input-group">
+          <label for="usernameInput">ユーザー名</label>
+          <input type="text" id="usernameInput" placeholder="あなたの名前を入力" maxlength="12">
+        </div>
+        <div class="home-actions">
+          <button id="createRoomBtn" style="width:100%; font-size:16px; padding:12px;">新しく部屋を作成する</button>
+          <div class="join-row">
+            <input type="text" id="roomIdInput" placeholder="4桁の部屋番号" maxlength="4">
+            <button id="joinRoomBtn" class="success">部屋に参加</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ロビー画面 -->
+    <div id="lobbyScreen" class="hidden">
+      <div class="lobby-header">
+        <h2>部屋番号: <span id="displayRoomId" class="room-badge"></span></h2>
+        <button class="danger" id="leaveRoomBtn">ホームに戻る</button>
+      </div>
+
+      <div class="lobby-grid">
+        <!-- ルーム設定（ホストのみ操作可） -->
+        <div class="settings-panel">
+          <h3>ルール設定 <small style="color:#64748b; font-weight:normal;">(作成者のみ変更可)</small></h3>
+          <div class="setting-item">
+            <div>お絵描き時間: <span id="timeVal" style="color:#4f46e5;">60</span>秒</div>
+            <input type="range" id="timeSlider" min="30" max="180" step="10" value="60">
+          </div>
+          <div class="setting-item-row">
+            <label for="diffSelect">お題の難易度</label>
+            <select id="diffSelect">
+              <option value="easy">イージー（簡単）</option>
+              <option value="normal">ノーマル（普通）</option>
+              <option value="hard">ハード（難しい）</option>
+            </select>
+          </div>
+          <div class="setting-item-row">
+            <label for="guessLimitInput">回答制限回数</label>
+            <div><input type="number" id="guessLimitInput" min="1" max="20" value="3" style="width:70px;"> 回</div>
+          </div>
+          <div class="setting-item-row">
+            <label for="winPointsInput">勝利ポイント</label>
+            <div><input type="number" id="winPointsInput" min="1" max="30" value="5" style="width:70px;"> pt</div>
+          </div>
+          <div class="setting-item-row">
+            <label for="passLimitInput">パス可能回数</label>
+            <div><input type="number" id="passLimitInput" min="0" max="10" value="2" style="width:70px;"> 回</div>
+          </div>
+        </div>
+
+        <!-- プレイヤー一覧 -->
+        <div class="players-panel">
+          <h3>参加者一覧</h3>
+          <ul id="playerList"></ul>
+          <div class="lobby-buttons">
+            <button id="readyBtn" class="success">準備OK</button>
+            <button id="startGameBtn" class="hidden">ゲームスタート</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ゲーム画面 -->
+    <div id="gameScreen" class="hidden">
+      <div class="game-header">
+        <div>描き手: <strong id="drawerName" style="color:#4f46e5;"></strong></div>
+        <div id="wordDisplay" class="word-box">お題: ？？？</div>
+        <div class="timer-box">残り <span id="timerDisplay">60</span>秒</div>
+      </div>
+
+      <div class="game-area">
+        <div class="canvas-wrapper">
+          <canvas id="canvas" width="540" height="400"></canvas>
+          <!-- 描き手専用ツール -->
+          <!-- 描き手専用ツール -->
+          <div id="drawTools" class="tools hidden">
+            <input type="color" id="colorPicker" value="#000000" title="色を選択">
+            <div class="brush-control">
+              <span>太さ</span>
+              <input type="range" id="brushSize" min="2" max="30" value="4">
+            </div>
+            <button id="penModeBtn" class="secondary active-tool">✏️ ペン</button>
+            <button id="fillModeBtn" class="secondary">🪣 塗りつぶし</button>
+            <button id="undoBtn" class="secondary">↩️ 1つ戻る</button>
+            <button id="clearBtn" class="danger">🗑️ 全消去</button>
+            <button id="passBtn" class="secondary">⏭️ パス (<span id="passCount">0</span>)</button>
+          </div>
+        </div>
+
+        <!-- チャット＆回答欄 -->
+        <div class="chat-box">
+          <div id="scoreBoard"></div>
+          <div id="chatLog"></div>
+          <form id="chatForm">
+            <input type="text" id="chatInput" placeholder="答えを入力...">
+            <button type="submit">送信</button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- カウントダウン・ターン終了・最終結果オーバーレイ -->
+    <div id="overlay" class="overlay hidden">
+      <div id="overlayText"></div>
+      <button id="nextTurnBtn" class="success hidden">次のゲームへ</button>
+      <button id="backLobbyBtn" class="hidden">ロビーに戻る</button>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="client.js"></script>
+</body>
+</html>
