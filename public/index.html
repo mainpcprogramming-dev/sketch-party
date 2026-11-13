@@ -66,13 +66,17 @@
         <!-- プレイヤー一覧 -->
         <div class="players-panel">
           <div class="players-header">
-            <h3>参加者一覧</h3>
-            <span id="lobbyReadyCount" class="ready-counter">準備OK: 0 / 0人</span>
+            <h3>描く順番（上から順）</h3>
+            <div style="display:flex; gap:6px; align-items:center;">
+              <button id="shuffleBtn" class="secondary hidden" style="padding:4px 10px; font-size:12px;">🔀 順番シャッフル</button>
+              <span id="lobbyReadyCount" class="ready-counter">準備OK: 0 / 0人</span>
+            </div>
           </div>
           <ul id="playerList"></ul>
           <div class="lobby-buttons">
             <button id="readyBtn" class="danger">準備OK</button>
             <button id="startGameBtn" class="hidden">ゲームスタート</button>
+            <button id="forceStartBtn" class="warning hidden">⚡ 強制スタート</button>
           </div>
         </div>
       </div>
@@ -110,7 +114,7 @@
           <div id="chatLog"></div>
           <form id="chatForm" autocomplete="off">
             <input type="text" id="chatInput" name="quiz_answer_field" placeholder="答えを入力..." autocomplete="off">
-            <button type="submit">送信</button>
+            <button type="submit" id="chatSubmitBtn">送信</button>
           </form>
         </div>
       </div>

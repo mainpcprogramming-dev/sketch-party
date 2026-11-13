@@ -10,6 +10,9 @@ const turnEndReadyCount = document.getElementById('turnEndReadyCount');
 const backLobbyBtn = document.getElementById('backLobbyBtn');
 const readyBtn = document.getElementById('readyBtn');
 const passPopup = document.getElementById('passPopup');
+const passBtn = document.getElementById('passBtn');
+const chatInput = document.getElementById('chatInput');
+const chatSubmitBtn = document.getElementById('chatSubmitBtn');
 
 let myId = null;
 let currentRoom = null;
@@ -60,14 +63,15 @@ function emitSettings() {
 });
 timeSlider.oninput = () => { document.getElementById('timeVal').textContent = timeSlider.value; };
 
-// 準備OKボタン（ロビー・ターン終了画面共通）
+// 準備OK・シャッフル・スタートボタン
 readyBtn.onclick = () => socket.emit('toggleReady');
 turnEndReadyBtn.onclick = () => socket.emit('toggleReady');
-
-document.getElementById('startGameBtn').onclick = () => socket.emit('startGame');
+document.getElementById('shuffleBtn').onclick = () => socket.emit('shufflePlayers');
+document.getElementById('startGameBtn').onclick = () => socket.emit('startGame', { force: false });
+document.getElementById('forceStartBtn').onclick = () => socket.emit('startGame', { force: true });
 backLobbyBtn.onclick = () => socket.emit('backToLobby');
 
-// 準備OKボタンの色（未準備=赤 danger / 準備完了=緑 success）を更新する共通関数
+// 準備OKボタンの色（未準備=赤 danger / 準備完了=緑 success）を更新
 function updateReadyButtonStyle(btnElement, isReady) {
   if (isReady) {
     btnElement.classList.remove('danger');
@@ -77,6 +81,54 @@ function updateReadyButtonStyle(btnElement, isReady) {
     btnElement.classList.remove('success');
     btnElement.classList.add('danger');
     btnElement.textContent = '準備OK';
+  }
+}
+
+// パスボタンの表示・クールダウン秒数カウント・有効無効を更新
+function updatePassButtonUI(room) {
+  if (!room) return;
+  const left = room.passesLeft;
+  const cd = room.passCooldown || 0;
+
+  if (left <= 0) {
+    passBtn.disabled = true;
+    passBtn.textContent = '⏭️ パス (0)';
+  } else if (cd > 0) {
+    passBtn.disabled = true;
+    passBtn.textContent = `⏭️ パス (あと${cd}秒)`;
+  } else {
+    passBtn.disabled = false;
+    passBtn.textContent = `⏭️ パス (${left})`;
+  }
+}
+
+// チャット入力欄のロック状態（描き手・回答上限到達・通常回答）を更新
+function updateChatInputState(room) {
+  if (!room) return;
+  const me = room.players.find(p => p.id === myId);
+  const drawer = room.players[room.drawerIndex];
+  const amIDrawer = drawer && drawer.id === myId;
+
+  if (room.state === 'playing') {
+    if (amIDrawer) {
+      chatInput.value = '';
+      chatInput.disabled = true;
+      chatSubmitBtn.disabled = true;
+      chatInput.placeholder = '描き手は入力できません';
+    } else if (me && me.guessesLeft <= 0 && !me.answered) {
+      chatInput.value = '';
+      chatInput.disabled = true;
+      chatSubmitBtn.disabled = true;
+      chatInput.placeholder = '回答上限に達しました';
+    } else {
+      chatInput.disabled = false;
+      chatSubmitBtn.disabled = false;
+      chatInput.placeholder = '答えを入力...';
+    }
+  } else {
+    chatInput.disabled = false;
+    chatSubmitBtn.disabled = false;
+    chatInput.placeholder = 'チャットを入力...';
   }
 }
 
@@ -107,39 +159,62 @@ socket.on('roomUpdated', (room) => {
     // 準備OK人数の表示
     document.getElementById('lobbyReadyCount').textContent = `準備OK: ${readyCount} / ${totalCount}人`;
 
-    // 自分の準備OKボタンの色を更新（未準備=赤、OK=緑）
     if (me) updateReadyButtonStyle(readyBtn, me.ready);
 
+    // 描く順番（上から順）リスト表示
     const list = document.getElementById('playerList');
-    list.innerHTML = room.players.map(p => {
+    list.innerHTML = room.players.map((p, index) => {
       const badge = p.ready
         ? '<span class="status-ready">✅ 準備OK</span>'
         : '<span class="status-wait">未準備</span>';
-      return `<li><span>${p.name} ${p.id === room.hostId ? '👑' : ''}</span>${badge}</li>`;
+      return `<li><span><span class="order-num">${index + 1}</span>${p.name} ${p.id === room.hostId ? '👑' : ''}</span>${badge}</li>`;
     }).join('');
 
+    // ホスト専用ボタン（シャッフル・通常スタート・強制スタート）
+    const shuffleBtn = document.getElementById('shuffleBtn');
     const startBtn = document.getElementById('startGameBtn');
+    const forceStartBtn = document.getElementById('forceStartBtn');
+
     if (isHost) {
+      shuffleBtn.classList.remove('hidden');
+      shuffleBtn.disabled = totalCount < 2;
+
       startBtn.classList.remove('hidden');
       startBtn.disabled = !(totalCount >= 2 && readyCount === totalCount);
+
+      forceStartBtn.classList.remove('hidden');
+      forceStartBtn.disabled = totalCount < 2;
     } else {
+      shuffleBtn.classList.add('hidden');
       startBtn.classList.add('hidden');
+      forceStartBtn.classList.add('hidden');
     }
   } else if (room.state === 'turnEnd') {
-    // ターン終了画面の準備OK人数＆ボタン色のリアルタイム更新
     turnEndReadyCount.textContent = `準備OK: ${readyCount} / ${totalCount}人`;
     if (me) updateReadyButtonStyle(turnEndReadyBtn, me.ready);
   } else if (room.state === 'gameEnd') {
+    // 規定ポイント到達時は準備OKを挟まずそのまま結果画面を表示
+    drawing = false;
+    lobbyScreen.classList.add('hidden');
+    gameScreen.classList.remove('hidden');
     overlay.classList.remove('hidden');
     turnEndReadyArea.classList.add('hidden');
     backLobbyBtn.classList.remove('hidden');
-    const ranking = [...room.players].sort((a, b) => b.score - a.score)
-      .map((p, i) => `${i + 1}位: ${p.name} (${p.score}pt)`).join('<br>');
+
+    const sorted = [...room.players].sort((a, b) => b.score - a.score);
+    const topScore = sorted.length > 0 ? sorted[0].score : 0;
+
+    const ranking = sorted.map((p, i) => {
+      const crown = (p.score === topScore) ? '👑 ' : '';
+      return `${i + 1}位: ${crown}${p.name} (${p.score}pt)`;
+    }).join('<br>');
+
     document.getElementById('overlayText').innerHTML = `🏆 ゲーム終了！ 🏆<br><br>${ranking}`;
   }
 
   updateScoreBoard(room);
-  document.getElementById('passCount').textContent = room.passesLeft;
+  updatePassButtonUI(room);
+  updateChatInputState(room);
 });
 
 function updateScoreBoard(room) {
@@ -147,11 +222,17 @@ function updateScoreBoard(room) {
   sb.innerHTML = '<strong>スコア:</strong> ' + room.players.map(p => `${p.name} (<b>${p.score}pt</b>)`).join(' / ');
 }
 
-// --- パス時の1秒間ポップアップ表示 ---
+// --- パス時のクールダウン秒数更新＆1秒間ポップアップ ---
+socket.on('passCooldownTick', (cd) => {
+  if (currentRoom) {
+    currentRoom.passCooldown = cd;
+    updatePassButtonUI(currentRoom);
+  }
+});
+
 socket.on('wordPassedPopup', () => {
   if (passPopupTimer) clearTimeout(passPopupTimer);
   passPopup.classList.remove('hidden');
-  // アニメーションを再発火させるためのリフロー
   void passPopup.offsetWidth;
   passPopupTimer = setTimeout(() => {
     passPopup.classList.add('hidden');
@@ -170,6 +251,7 @@ socket.on('countdown', (num) => {
 });
 
 socket.on('turnStarted', ({ room }) => {
+  currentRoom = room;
   overlay.classList.add('hidden');
   const drawer = room.players[room.drawerIndex];
   isDrawer = (drawer.id === myId);
@@ -179,10 +261,9 @@ socket.on('turnStarted', ({ room }) => {
   document.getElementById('wordDisplay').textContent = isDrawer ? 'お題取得中...' : 'お題: ？？？';
 
   document.getElementById('drawTools').classList.toggle('hidden', !isDrawer);
-  const chatInput = document.getElementById('chatInput');
   chatInput.value = '';
-  chatInput.disabled = isDrawer;
-  chatInput.placeholder = isDrawer ? '描き手は入力できません' : '答えを入力...';
+  updatePassButtonUI(room);
+  updateChatInputState(room);
 });
 
 socket.on('secretWord', (word) => {
@@ -194,6 +275,7 @@ socket.on('timerTick', (t) => {
 });
 
 socket.on('turnEnded', ({ reason, answer, room }) => {
+  currentRoom = room;
   drawing = false;
   overlay.classList.remove('hidden');
   document.getElementById('overlayText').innerHTML = `${reason}<br>正解は「<span style="color:#fbbf24;">${answer}</span>」でした！`;
@@ -264,8 +346,10 @@ document.getElementById('clearBtn').onclick = () => {
   socket.emit('clearCanvas');
 };
 
-document.getElementById('passBtn').onclick = () => {
-  if (isDrawer) socket.emit('passWord');
+passBtn.onclick = () => {
+  if (isDrawer && !passBtn.disabled) {
+    socket.emit('passWord');
+  }
 };
 
 function clearCanvasLocal(resetHistory = true) {
@@ -417,11 +501,11 @@ function floodFill(startX, startY, fillColorHex) {
 // --- チャット送信 ---
 document.getElementById('chatForm').onsubmit = (e) => {
   e.preventDefault();
-  const input = document.getElementById('chatInput');
-  const msg = input.value.trim();
+  if (chatInput.disabled) return;
+  const msg = chatInput.value.trim();
   if (!msg) return;
   socket.emit('chatMessage', msg);
-  input.value = '';
+  chatInput.value = '';
 };
 
 socket.on('chatBroadcast', ({ name, text, msgType }) => {

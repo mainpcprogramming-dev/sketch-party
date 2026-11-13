@@ -169,7 +169,6 @@ const WORDS = {
   ]
 };
 
-// カタカナをひらがなに変換して表記ゆれを防ぐ関数
 function normalizeText(str) {
   return str.trim().replace(/[\u30a1-\u30f6]/g, m => String.fromCharCode(m.charCodeAt(0) - 0x60));
 }
@@ -220,6 +219,7 @@ io.on('connection', (socket) => {
       currentWord: null,
       usedWords: [],
       passesLeft: 0,
+      passCooldown: 0,
       timeLeft: 0
     };
 
@@ -248,7 +248,20 @@ io.on('connection', (socket) => {
     io.to(room.id).emit('roomUpdated', room);
   });
 
-  // 準備OK切り替え（ロビー ＆ ターン終了後の次ゲーム待機の両方で動作）
+  // 描画順シャッフル（ホストのみ・ロビー中）
+  socket.on('shufflePlayers', () => {
+    const room = rooms[socket.roomId];
+    if (!room || room.hostId !== socket.id || room.state !== 'lobby') return;
+    if (room.players.length < 2) return;
+
+    for (let i = room.players.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [room.players[i], room.players[j]] = [room.players[j], room.players[i]];
+    }
+    io.to(room.id).emit('roomUpdated', room);
+  });
+
+  // 準備OK切り替え（ロビー ＆ ターン終了後の次ゲーム待機）
   socket.on('toggleReady', () => {
     const room = rooms[socket.roomId];
     if (!room) return;
@@ -260,29 +273,25 @@ io.on('connection', (socket) => {
 
     io.to(room.id).emit('roomUpdated', room);
 
-    // ターン終了画面（turnEnd）の場合、全員が準備OKになったら強制的に次のゲームへ自動開始
+    // ターン終了画面で全員が準備OKになったら強制的に次のターンへ自動開始
     if (room.state === 'turnEnd' && room.players.length > 0 && room.players.every(p => p.ready)) {
-      const winner = room.players.find(p => p.score >= room.settings.winPoints);
-      if (winner) {
-        room.state = 'gameEnd';
-        io.to(room.id).emit('roomUpdated', room);
-        return;
-      }
       room.drawerIndex = (room.drawerIndex + 1) % room.players.length;
       startTurnCountdown(room);
     }
   });
 
-  // ゲーム開始（ロビー画面からホストが開始）
-  socket.on('startGame', () => {
+  // ゲーム開始（通常スタート / 強制スタート共通）
+  socket.on('startGame', ({ force } = {}) => {
     const room = rooms[socket.roomId];
     if (!room || room.state !== 'lobby') return;
     if (room.hostId !== socket.id) return;
     if (room.players.length < 2) return socket.emit('errorMsg', '2人以上必要です。');
-    if (!room.players.every(p => p.ready)) return socket.emit('errorMsg', '全員が準備OKになる必要があります。');
+    if (!force && !room.players.every(p => p.ready)) {
+      return socket.emit('errorMsg', '全員が準備OKになる必要があります。');
+    }
 
-    room.players.forEach(p => p.score = 0);
-    room.drawerIndex = 0;
+    room.players.forEach(p => { p.score = 0; });
+    room.drawerIndex = 0; // リストの一番上から順番に描く
     room.usedWords = [];
     startTurnCountdown(room);
   });
@@ -293,11 +302,12 @@ io.on('connection', (socket) => {
 
     room.state = 'countdown';
     room.passesLeft = room.settings.maxPasses;
+    room.passCooldown = 0;
     room.currentWord = getRandomWord(room.settings.difficulty, room.usedWords);
     room.players.forEach((p, idx) => {
       p.guessesLeft = (idx === room.drawerIndex) ? 0 : room.settings.maxGuesses;
       p.answered = false;
-      p.ready = false; // 次のターン終了時用にready状態をリセット
+      p.ready = false;
     });
 
     io.to(room.id).emit('clearCanvas');
@@ -322,6 +332,7 @@ io.on('connection', (socket) => {
   function beginDrawingTurn(room) {
     room.state = 'playing';
     room.timeLeft = room.settings.timeLimit;
+    room.passCooldown = 0;
     const drawer = room.players[room.drawerIndex];
     if (!drawer) return;
 
@@ -334,6 +345,13 @@ io.on('connection', (socket) => {
         clearRoomTimers(room.id);
         return;
       }
+
+      // パスのクールダウン秒数を1秒ずつ減らす
+      if (room.passCooldown > 0) {
+        room.passCooldown--;
+        io.to(room.id).emit('passCooldownTick', room.passCooldown);
+      }
+
       room.timeLeft--;
       io.to(room.id).emit('timerTick', room.timeLeft);
       if (room.timeLeft <= 0) {
@@ -344,13 +362,28 @@ io.on('connection', (socket) => {
 
   function endTurn(room, reason) {
     if (room.state !== 'playing') return;
-    room.state = 'turnEnd';
     clearRoomTimers(room.id);
 
-    // ターン終了時に全員のreadyを未準備(false)にして準備ボタン待機にする
+    const answerText = Array.isArray(room.currentWord) ? room.currentWord[0] : String(room.currentWord || '');
+
+    // 1人以上のプレイヤーが勝利ポイントに到達しているかチェック
+    const hasWinner = room.players.some(p => p.score >= room.settings.winPoints);
+    if (hasWinner) {
+      // 準備OK画面を挟まずにそのまま最終結果画面へ移行
+      room.state = 'gameEnd';
+      io.to(room.id).emit('chatBroadcast', {
+        name: 'システム',
+        text: `🏆 規定ポイント到達！正解は「${answerText}」でした！`,
+        msgType: 'correct'
+      });
+      io.to(room.id).emit('roomUpdated', room);
+      return;
+    }
+
+    // まだ誰も勝利ポイントに達していない場合はターン終了＆準備OK待ちへ
+    room.state = 'turnEnd';
     room.players.forEach(p => { p.ready = false; });
 
-    const answerText = Array.isArray(room.currentWord) ? room.currentWord[0] : String(room.currentWord || '');
     io.to(room.id).emit('turnEnded', {
       reason,
       answer: answerText,
@@ -359,20 +392,23 @@ io.on('connection', (socket) => {
     io.to(room.id).emit('roomUpdated', room);
   }
 
-  // お題パス（描き手のみ）
+  // お題パス（描き手のみ・クールダウン0のときのみ実行可能）
   socket.on('passWord', () => {
     const room = rooms[socket.roomId];
     if (!room || room.state !== 'playing') return;
     const drawer = room.players[room.drawerIndex];
-    if (!drawer || drawer.id !== socket.id || room.passesLeft <= 0) return;
+    if (!drawer || drawer.id !== socket.id) return;
+    if (room.passesLeft <= 0 || room.passCooldown > 0) return;
 
     room.passesLeft--;
+    room.passCooldown = 10; // パス使用後10秒間のクールダウンを設定
     room.currentWord = getRandomWord(room.settings.difficulty, room.usedWords);
+
     io.to(room.id).emit('clearCanvas');
     io.to(room.id).emit('roomUpdated', room);
+    io.to(room.id).emit('passCooldownTick', room.passCooldown);
     io.to(drawer.id).emit('secretWord', room.currentWord[0]);
 
-    // チャット通知（緑と被らないオレンジ系）＆1秒間ポップアップイベント送信
     io.to(room.id).emit('chatBroadcast', {
       name: 'システム',
       text: `⏭️ ${drawer.name} さんがパスをしました！`,
@@ -429,7 +465,7 @@ io.on('connection', (socket) => {
           });
           io.to(room.id).emit('roomUpdated', room);
 
-          // 回答者が1人正解したら即座にそのターンを終了
+          // 1人正解したら即ターン終了（規定ポイント到達時はそのまま最終結果へ）
           endTurn(room, `${player.name} さんが正解！`);
           return;
         } else {
@@ -490,14 +526,7 @@ io.on('connection', (socket) => {
         room.drawerIndex = 0;
       }
 
-      // ターン終了待機中に誰かが抜けた結果、残りの全員が準備OKになっていた場合の自動進行チェック
       if (room.state === 'turnEnd' && room.players.every(p => p.ready)) {
-        const winner = room.players.find(p => p.score >= room.settings.winPoints);
-        if (winner) {
-          room.state = 'gameEnd';
-          io.to(roomId).emit('roomUpdated', room);
-          return;
-        }
         room.drawerIndex = (room.drawerIndex + 1) % room.players.length;
         startTurnCountdown(room);
         return;
