@@ -80,6 +80,16 @@
           </div>
         </div>
       </div>
+
+      <!-- ロビー専用チャット（ゲーム中は非表示・見れない） -->
+      <div class="lobby-chat-panel">
+        <h3>💬 ロビーチャット <small style="color:#64748b; font-weight:normal;">(待機中のみ使用可・ゲーム中は非表示)</small></h3>
+        <div id="lobbyChatLog"></div>
+        <form id="lobbyChatForm" autocomplete="off">
+          <input type="text" id="lobbyChatInput" name="lobby_chat_field" placeholder="ロビーの仲間にメッセージ..." autocomplete="off">
+          <button type="submit">送信</button>
+        </form>
+      </div>
     </div>
 
     <!-- ゲーム画面 -->
@@ -101,6 +111,7 @@
               <input type="range" id="brushSize" min="2" max="30" value="4">
             </div>
             <button id="penModeBtn" class="secondary active-tool">✏️ ペン</button>
+            <button id="eraserModeBtn" class="secondary">🧽 消しゴム</button>
             <button id="fillModeBtn" class="secondary">🪣 塗りつぶし</button>
             <button id="undoBtn" class="secondary">↩️ 1つ戻る</button>
             <button id="clearBtn" class="danger">🗑️ 全消去</button>
@@ -108,7 +119,7 @@
           </div>
         </div>
 
-        <!-- チャット＆回答欄 -->
+        <!-- ゲーム用チャット＆回答欄 -->
         <div class="chat-box">
           <div id="scoreBoard"></div>
           <div id="chatLog"></div>

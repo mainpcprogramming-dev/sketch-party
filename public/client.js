@@ -13,11 +13,13 @@ const passPopup = document.getElementById('passPopup');
 const passBtn = document.getElementById('passBtn');
 const chatInput = document.getElementById('chatInput');
 const chatSubmitBtn = document.getElementById('chatSubmitBtn');
+const lobbyChatInput = document.getElementById('lobbyChatInput');
+const lobbyChatLog = document.getElementById('lobbyChatLog');
 
 let myId = null;
 let currentRoom = null;
 let isDrawer = false;
-let toolMode = 'pen';
+let toolMode = 'pen'; // 'pen' | 'eraser' | 'fill'
 let passPopupTimer = null;
 
 socket.on('connect', () => { myId = socket.id; });
@@ -26,6 +28,7 @@ socket.on('errorMsg', (msg) => alert(msg));
 // --- ホーム画面操作 ---
 document.getElementById('createRoomBtn').onclick = () => {
   const username = document.getElementById('usernameInput').value.trim() || 'ゲスト';
+  lobbyChatLog.innerHTML = '';
   socket.emit('createRoom', { username });
 };
 
@@ -33,6 +36,7 @@ document.getElementById('joinRoomBtn').onclick = () => {
   const username = document.getElementById('usernameInput').value.trim() || 'ゲスト';
   const roomId = document.getElementById('roomIdInput').value.trim();
   if (!roomId) return alert('部屋番号を入力してください');
+  lobbyChatLog.innerHTML = '';
   socket.emit('joinRoom', { username, roomId });
 };
 
@@ -41,6 +45,24 @@ document.getElementById('leaveRoomBtn').onclick = () => {
   lobbyScreen.classList.add('hidden');
   homeScreen.classList.remove('hidden');
 };
+
+// --- ロビー専用チャット送信・受信（ゲーム中は完全非表示） ---
+document.getElementById('lobbyChatForm').onsubmit = (e) => {
+  e.preventDefault();
+  const msg = lobbyChatInput.value.trim();
+  if (!msg) return;
+  socket.emit('lobbyChatMessage', msg);
+  lobbyChatInput.value = '';
+};
+
+socket.on('lobbyChatBroadcast', ({ name, text }) => {
+  if (!currentRoom || currentRoom.state !== 'lobby') return;
+  const div = document.createElement('div');
+  div.className = 'chat-msg';
+  div.innerHTML = `<b>${name}:</b> ${text}`;
+  lobbyChatLog.appendChild(div);
+  lobbyChatLog.scrollTop = lobbyChatLog.scrollHeight;
+});
 
 // --- ロビー設定同期 ---
 const timeSlider = document.getElementById('timeSlider');
@@ -156,12 +178,10 @@ socket.on('roomUpdated', (room) => {
 
     [timeSlider, diffSelect, guessLimitInput, winPointsInput, passLimitInput].forEach(el => el.disabled = !isHost);
 
-    // 準備OK人数の表示
     document.getElementById('lobbyReadyCount').textContent = `準備OK: ${readyCount} / ${totalCount}人`;
 
     if (me) updateReadyButtonStyle(readyBtn, me.ready);
 
-    // 描く順番（上から順）リスト表示
     const list = document.getElementById('playerList');
     list.innerHTML = room.players.map((p, index) => {
       const badge = p.ready
@@ -170,7 +190,6 @@ socket.on('roomUpdated', (room) => {
       return `<li><span><span class="order-num">${index + 1}</span>${p.name} ${p.id === room.hostId ? '👑' : ''}</span>${badge}</li>`;
     }).join('');
 
-    // ホスト専用ボタン（シャッフル・通常スタート・強制スタート）
     const shuffleBtn = document.getElementById('shuffleBtn');
     const startBtn = document.getElementById('startGameBtn');
     const forceStartBtn = document.getElementById('forceStartBtn');
@@ -193,7 +212,7 @@ socket.on('roomUpdated', (room) => {
     turnEndReadyCount.textContent = `準備OK: ${readyCount} / ${totalCount}人`;
     if (me) updateReadyButtonStyle(turnEndReadyBtn, me.ready);
   } else if (room.state === 'gameEnd') {
-    // 規定ポイント到達時は準備OKを挟まずそのまま結果画面を表示
+    // 規定ポイント到達時は準備OKを挟まず、最後の正解とランキングをそのまま結果画面に表示
     drawing = false;
     lobbyScreen.classList.add('hidden');
     gameScreen.classList.remove('hidden');
@@ -209,7 +228,11 @@ socket.on('roomUpdated', (room) => {
       return `${i + 1}位: ${crown}${p.name} (${p.score}pt)`;
     }).join('<br>');
 
-    document.getElementById('overlayText').innerHTML = `🏆 ゲーム終了！ 🏆<br><br>${ranking}`;
+    const lastAnsHtml = room.lastAnswer
+      ? `<div style="font-size:20px; margin: 8px 0 16px;">最後の正解は「<span style="color:#fbbf24;">${room.lastAnswer}</span>」でした！</div>`
+      : '<br>';
+
+    document.getElementById('overlayText').innerHTML = `🏆 ゲーム終了！ 🏆${lastAnsHtml}${ranking}`;
   }
 
   updateScoreBoard(room);
@@ -243,6 +266,7 @@ socket.on('wordPassedPopup', () => {
 // --- カウントダウン・ターン進行 ---
 socket.on('countdown', (num) => {
   lobbyScreen.classList.add('hidden');
+  lobbyChatLog.innerHTML = ''; // ゲーム開始時にロビーチャットをクリアして見えないようにする
   gameScreen.classList.remove('hidden');
   overlay.classList.remove('hidden');
   turnEndReadyArea.classList.add('hidden');
@@ -255,6 +279,9 @@ socket.on('turnStarted', ({ room }) => {
   overlay.classList.add('hidden');
   const drawer = room.players[room.drawerIndex];
   isDrawer = (drawer.id === myId);
+
+  // ターン開始時はツールをペンにリセット
+  setActiveTool('pen');
 
   document.getElementById('drawerName').textContent = drawer.name;
   document.getElementById('timerDisplay').textContent = room.timeLeft;
@@ -293,7 +320,7 @@ socket.on('turnEnded', ({ reason, answer, room }) => {
   updateScoreBoard(room);
 });
 
-// --- キャンバス描画・塗りつぶし・1つ戻る・タッチ操作 ---
+// --- キャンバス描画・消しゴム・塗りつぶし・1つ戻る・タッチ操作 ---
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d', { willReadFrequently: true });
 ctx.fillStyle = '#ffffff';
@@ -305,8 +332,16 @@ let historyStack = [];
 const MAX_HISTORY = 20;
 
 const penBtn = document.getElementById('penModeBtn');
+const eraserBtn = document.getElementById('eraserModeBtn');
 const fillBtn = document.getElementById('fillModeBtn');
 const undoBtn = document.getElementById('undoBtn');
+
+function setActiveTool(mode) {
+  toolMode = mode;
+  penBtn.classList.toggle('active-tool', mode === 'pen');
+  eraserBtn.classList.toggle('active-tool', mode === 'eraser');
+  fillBtn.classList.toggle('active-tool', mode === 'fill');
+}
 
 function saveHistory() {
   if (historyStack.length >= MAX_HISTORY) {
@@ -321,17 +356,14 @@ function undoLocal() {
   ctx.putImageData(prevState, 0, 0);
 }
 
-penBtn.onclick = () => {
-  toolMode = 'pen';
-  penBtn.classList.add('active-tool');
-  fillBtn.classList.remove('active-tool');
-};
+penBtn.onclick = () => setActiveTool('pen');
+eraserBtn.onclick = () => setActiveTool('eraser');
+fillBtn.onclick = () => setActiveTool('fill');
 
-fillBtn.onclick = () => {
-  toolMode = 'fill';
-  fillBtn.classList.add('active-tool');
-  penBtn.classList.remove('active-tool');
-};
+// カラーピッカーの色を変えたら自動的にペンモードに戻す
+document.getElementById('colorPicker').addEventListener('input', () => {
+  if (toolMode === 'eraser') setActiveTool('pen');
+});
 
 undoBtn.onclick = () => {
   if (!isDrawer || historyStack.length === 0) return;
@@ -383,14 +415,18 @@ function getCanvasCoords(e) {
   };
 }
 
+function getActiveStrokeColor() {
+  return toolMode === 'eraser' ? '#ffffff' : document.getElementById('colorPicker').value;
+}
+
 function handleStart(e) {
   if (!isDrawer) return;
   if (e.cancelable) e.preventDefault();
 
   const { x, y } = getCanvasCoords(e);
-  const color = document.getElementById('colorPicker').value;
 
   if (toolMode === 'fill') {
+    const color = document.getElementById('colorPicker').value;
     saveHistory();
     floodFill(x, y, color);
     socket.emit('fill', { x, y, color });
@@ -398,6 +434,7 @@ function handleStart(e) {
     saveHistory();
     drawing = true;
     [lastX, lastY] = [x, y];
+    const color = getActiveStrokeColor();
     const size = document.getElementById('brushSize').value;
     drawLine(x, y, x, y, color, size);
     socket.emit('draw', { x1: x, y1: y, x2: x, y2: y, color, size, isStrokeStart: true });
@@ -405,11 +442,11 @@ function handleStart(e) {
 }
 
 function handleMove(e) {
-  if (!drawing || !isDrawer || toolMode !== 'pen') return;
+  if (!drawing || !isDrawer || (toolMode !== 'pen' && toolMode !== 'eraser')) return;
   if (e.cancelable) e.preventDefault();
 
   const { x, y } = getCanvasCoords(e);
-  const color = document.getElementById('colorPicker').value;
+  const color = getActiveStrokeColor();
   const size = document.getElementById('brushSize').value;
 
   drawLine(lastX, lastY, x, y, color, size);
@@ -498,7 +535,7 @@ function floodFill(startX, startY, fillColorHex) {
   ctx.putImageData(imgData, 0, 0);
 }
 
-// --- チャット送信 ---
+// --- ゲーム中チャット送信 ---
 document.getElementById('chatForm').onsubmit = (e) => {
   e.preventDefault();
   if (chatInput.disabled) return;
